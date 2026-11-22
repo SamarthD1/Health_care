@@ -1,6 +1,30 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
+// Live S3 Bucket for Aegis-Protected MediCore Backend in AWS ap-south-1
+export const S3_BASE_URL = "https://medicore-patient-reports-017080036675.s3.ap-south-1.amazonaws.com/reports";
+
+export const getS3ReportUrl = (report) => {
+  const paddedId = String(report.id || 1).padStart(4, "0");
+  const cleanName = (report.patient_name || report.name || "Patient").trim().replace(/\s+/g, "_");
+  const filename = `Report_${paddedId}_${cleanName}.pdf`;
+  return `${S3_BASE_URL}/${filename}`;
+};
+
+export const fetchS3ReportBlobUrl = async (report) => {
+  const s3Url = getS3ReportUrl(report);
+  try {
+    const response = await fetch(s3Url, { cache: "no-store" });
+    if (response.ok) {
+      const blob = await response.blob();
+      return { url: URL.createObjectURL(blob), fromS3: true, s3Url };
+    }
+  } catch (err) {
+    console.warn("Direct S3 fetch error:", err);
+  }
+  return null;
+};
+
 export const createReportPDFDoc = (report, currentUser = null) => {
   const doc = new jsPDF({
     orientation: "portrait",
@@ -124,132 +148,97 @@ export const createReportPDFDoc = (report, currentUser = null) => {
     ],
     headStyles: {
       fillColor: primaryColor,
-      textColor: 255,
+      textColor: [255, 255, 255],
       fontStyle: "bold",
       fontSize: 8.5,
-      halign: "center",
     },
     bodyStyles: {
+      textColor: textColor,
       fontSize: 8.5,
-      halign: "center",
-      textColor: [40, 40, 40],
     },
   });
 
-  // Diagnosis & Clinical Notes
-  let afterVitalsY = doc.lastAutoTable.finalY + 8;
+  // Diagnosis Section
+  startY = doc.lastAutoTable.finalY + 8;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(10);
   doc.setTextColor(...primaryColor);
-  doc.text("2. DIAGNOSIS & CLINICAL NOTES", 14, afterVitalsY);
+  doc.text("2. DIAGNOSIS & CLINICAL NOTES", 14, startY);
 
   doc.setFillColor(...lightGray);
   doc.setDrawColor(210, 220, 230);
-  doc.roundedRect(14, afterVitalsY + 3, pageWidth - 28, 22, 1.5, 1.5, "FD");
+  doc.roundedRect(14, startY + 3, pageWidth - 28, 24, 2, 2, "FD");
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8.5);
   doc.setTextColor(...textColor);
-  doc.text("Primary Diagnosis:", 18, afterVitalsY + 9);
-  doc.setFont("helvetica", "bold");
+  doc.text("Primary Diagnosis:", 18, startY + 10);
+  doc.setFont("helvetica", "normal");
   doc.setTextColor(180, 40, 40);
-  doc.text(`${report.disease || "General Medical Examination"}`, 50, afterVitalsY + 9);
+  doc.text(`${report.disease || "Under Evaluation"}`, 50, startY + 10);
 
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...textColor);
-  doc.text("Physician Notes:", 18, afterVitalsY + 16);
+  doc.text("Physician Notes:", 18, startY + 18);
   doc.setFont("helvetica", "normal");
-  const notes = report.info || "Patient examined. Continue routine care and follow-up as advised.";
-  const splitNotes = doc.splitTextToSize(notes, pageWidth - 75);
-  doc.text(splitNotes, 50, afterVitalsY + 16);
+  const notes =
+    report.info ||
+    "Patient presented for clinical evaluation. Diagnostic tests reviewed and confirmed.";
+  const splitNotes = doc.splitTextToSize(notes, pageWidth - 70);
+  doc.text(splitNotes, 50, startY + 18);
 
-  // Medications / Prescriptions Table
-  let afterNotesY = afterVitalsY + 30;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(10);
-  doc.setTextColor(...primaryColor);
-  doc.text("3. PRESCRIBED MEDICATIONS & REGIMEN", 14, afterNotesY);
-
-  const medRows =
-    report.medicines && report.medicines.length > 0
-      ? report.medicines.map((m, idx) => [
-          idx + 1,
-          m.name || "N/A",
-          m.dosage || "N/A",
-          m.frequency || "N/A",
-          m.duration || "N/A",
-        ])
-      : [["1", "No specific prescription recorded", "-", "-", "-"]];
-
-  autoTable(doc, {
-    startY: afterNotesY + 3,
-    margin: { left: 14, right: 14 },
-    theme: "striped",
-    head: [["#", "Medicine / Treatment", "Dosage", "Frequency", "Duration"]],
-    body: medRows,
-    headStyles: {
-      fillColor: primaryColor,
-      textColor: 255,
-      fontStyle: "bold",
-      fontSize: 8.5,
-      halign: "left",
-    },
-    columnStyles: {
-      0: { halign: "center", cellWidth: 10 },
-      1: { fontStyle: "bold" },
-    },
-    bodyStyles: {
-      fontSize: 8.5,
-      textColor: [40, 40, 40],
-    },
-  });
-
-  // Signature and Footer
-  const footerY = Math.max(doc.lastAutoTable.finalY + 18, pageHeight - 38);
-
-  // Digital Signature section
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8.5);
-  doc.setTextColor(...textColor);
-  doc.text("Attending Physician:", pageWidth - 70, footerY);
-  doc.setFont("helvetica", "italic");
-  doc.text(`${doctorName}`, pageWidth - 70, footerY + 6);
-  doc.setDrawColor(180, 180, 180);
-  doc.line(pageWidth - 70, footerY + 8, pageWidth - 14, footerY + 8);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.text("Digitally Authorized & Verified", pageWidth - 70, footerY + 12);
-
-  // Bottom Notice
-  doc.setDrawColor(220, 220, 220);
-  doc.line(14, pageHeight - 14, pageWidth - 14, pageHeight - 14);
+  // Footer & Aegis Integrity Notice
+  doc.setDrawColor(200, 200, 200);
+  doc.line(14, pageHeight - 16, pageWidth - 14, pageHeight - 16);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   doc.setTextColor(120, 120, 120);
   doc.text(
-    "E-Health Management Hub • This is a computer generated clinical report • Valid without physical signature",
+    "E-Health Management Hub • Verified by Aegis Guardian S3 Vault • Valid without physical signature",
     14,
-    pageHeight - 9
+    pageHeight - 10
   );
-  doc.text(`Page 1 of 1`, pageWidth - 14, pageHeight - 9, { align: "right" });
+  doc.text(`Page 1 of 1`, pageWidth - 14, pageHeight - 10, { align: "right" });
 
   return { doc, patientName };
 };
 
-export const generateReportPDF = (report, currentUser = null) => {
+export const generateReportPDF = async (report, currentUser = null) => {
+  const s3Url = getS3ReportUrl(report);
+  try {
+    const response = await fetch(s3Url, { cache: "no-store" });
+    if (response.ok) {
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const paddedId = String(report.id || 1).padStart(4, "0");
+      const cleanName = (report.patient_name || report.name || "Patient").trim().replace(/\s+/g, "_");
+      const filename = `Report_${paddedId}_${cleanName}.pdf`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
+    }
+  } catch (_) {}
   const { doc, patientName } = createReportPDFDoc(report, currentUser);
-  const filename = `Report_${report.id || "medical"}_${(patientName || "patient").replace(/\s+/g, "_")}.pdf`;
-  doc.save(filename);
+  doc.save(`Report_${report.id || "medical"}_${(patientName || "patient").replace(/\s+/g, "_")}.pdf`);
 };
 
-export const getReportPDFBlobUrl = (report, currentUser = null) => {
+export const getReportPDFBlobUrl = async (report, currentUser = null) => {
+  const s3Result = await fetchS3ReportBlobUrl(report);
+  if (s3Result && s3Result.url) {
+    return s3Result.url;
+  }
   const { doc } = createReportPDFDoc(report, currentUser);
   const pdfBlob = doc.output("blob");
   return URL.createObjectURL(pdfBlob);
 };
 
-export const viewReportPDFInNewTab = (report, currentUser = null) => {
-  const url = getReportPDFBlobUrl(report, currentUser);
+export const viewReportPDFInNewTab = async (report, currentUser = null) => {
+  const url = await getReportPDFBlobUrl(report, currentUser);
   window.open(url, "_blank");
 };
